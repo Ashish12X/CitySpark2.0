@@ -6,7 +6,7 @@ const router = Router();
 
 function stripNotif(doc) {
   if (!doc) return doc;
-  const { _id, userId, __v, ...rest } = doc;
+  const { _id, userId: _userId, __v, ...rest } = doc;
   return rest;
 }
 

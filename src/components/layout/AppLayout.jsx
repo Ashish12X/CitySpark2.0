@@ -53,7 +53,7 @@ const NotificationPanel = ({ onClose }) => {
       animate={{ opacity: 1, y: 0, scale: 1 }}
       exit={{ opacity: 0, y: -8, scale: 0.97 }}
       transition={{ duration: 0.18 }}
-      className="absolute right-0 top-12 w-[min(24rem,calc(100vw-1.5rem))] bg-card border border-border/60 rounded-2xl shadow-2xl z-50 overflow-hidden"
+      className="fixed left-3 right-3 top-16 z-50 bg-card border border-border/60 rounded-2xl shadow-2xl overflow-hidden md:absolute md:left-auto md:right-0 md:top-12 md:w-[24rem]"
     >
       <div className="flex items-center justify-between px-4 py-3 border-b border-border/50 bg-muted/20">
         <div>
@@ -77,7 +77,7 @@ const NotificationPanel = ({ onClose }) => {
         </div>
       </div>
 
-      <div className="max-h-80 overflow-y-auto divide-y divide-border/30">
+      <div className="max-h-[60vh] overflow-y-auto divide-y divide-border/30 md:max-h-80">
         {!hasNotifications ? (
           <div className="py-10 text-center text-sm text-muted-foreground">
             {t('All caught up!')}

@@ -8,7 +8,7 @@ import { useLanguage } from '@/context/LanguageContext';
 
 const PORTAL_META = {
   aadhaar: { href: 'https://uidai.gov.in', isHttp: true },
-  pan: { href: 'https://www.onlineservices.nsdl.com/paam/endUserRegisterContact.html', isHttp: true },
+  pan: { href: 'https://www.utiitsl.com/', isHttp: true },
   voter: { href: 'https://voters.eci.gov.in', isHttp: true },
   passport: { href: 'https://www.passportindia.gov.in', isHttp: true },
   driving: { href: 'https://parivahan.gov.in/parivahan/', isHttp: true },

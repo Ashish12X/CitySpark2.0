@@ -25,7 +25,7 @@ const Input = React.forwardRef(({ className, type, voice, onTranscript, ...props
     }
   }, [props.value]);
 
-  const { defaultValue, value: propValue, onChange: propOnChange, ...rest } = props;
+  const { defaultValue: _dv, value: propValue, onChange: propOnChange, ...rest } = props;
 
   return (
     <div className="relative w-full group">

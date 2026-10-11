@@ -1,22 +1,22 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Mic, MicOff, Loader2 } from 'lucide-react';
+import { Mic } from 'lucide-react';
 import { Input } from '@/components/ui/Input';
 import { cn } from '@/lib/utils';
 import { useLanguage } from '@/context/LanguageContext';
 
 export function SmartInput({ className, value, onChange, onVoiceUpdate, placeholder, ...props }) {
   const [isListening, setIsListening] = useState(false);
+  const [isSupported, setIsSupported] = useState(false);
   const recognitionRef = useRef(null);
   const { t } = useLanguage();
 
   useEffect(() => {
-    // Check if browser supports Web Speech API
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (SpeechRecognition) {
       const recognition = new SpeechRecognition();
       recognition.continuous = false;
       recognition.interimResults = false;
-      recognition.lang = 'en-US'; // Or map based on current selected language in LanguageContext
+      recognition.lang = 'en-US';
 
       recognition.onstart = () => setIsListening(true);
       
@@ -25,20 +25,19 @@ export function SmartInput({ className, value, onChange, onVoiceUpdate, placehol
         if (onVoiceUpdate) {
             onVoiceUpdate(transcript);
         } else if (onChange) {
-            // Simulate standard event object for onChange
             const e = { target: { value: transcript }, currentTarget: { value: transcript } };
             onChange(e);
         }
       };
 
-      recognition.onerror = (e) => {
-        console.warn('Speech recognition error', e.error);
+      recognition.onerror = () => {
         setIsListening(false);
       };
 
       recognition.onend = () => setIsListening(false);
       
       recognitionRef.current = recognition;
+      setIsSupported(true);
     }
     
     return () => {
@@ -70,7 +69,7 @@ export function SmartInput({ className, value, onChange, onVoiceUpdate, placehol
         className={cn("pr-10 w-full", className)}
         {...props}
       />
-      {recognitionRef.current && (
+      {isSupported && (
         <button
           type="button"
           onClick={toggleListening}

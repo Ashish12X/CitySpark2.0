@@ -18,8 +18,8 @@ const GUIDANCE_KB = [
     id: 'pan_card_services',
     title: 'PAN Card Services',
     department: 'Income Tax Department (NSDL / UTIITSL)',
-    location: 'Apply online via official PAN portals or authorized facilitation centers',
-    whereToApply: 'www.onlineservices.nsdl.com or www.pan.utiitsl.com',
+    location: 'https://www.utiitsl.com/',
+    whereToApply: 'https://www.utiitsl.com/',
     timeline: 'Usually 7-15 working days depending on verification',
     fees: 'As per PAN issuance/update fee schedule',
     tags: [
@@ -400,7 +400,7 @@ export const getPriorityLabel = (score) => {
   return 'Low';
 };
 
-export const analyzePredictiveRisks = (issue, history = []) => {
+export const analyzePredictiveRisks = (issue, _history = []) => {
   const content = (issue.title + ' ' + issue.description).toLowerCase();
   
   if (content.includes('water') && content.includes('leak')) {
@@ -548,7 +548,7 @@ export const getCivicGuidance = async (query, language = 'en') => {
       }
 
       return result;
-    } catch (_e) {
+    } catch {
       // Try next model.
     }
   }

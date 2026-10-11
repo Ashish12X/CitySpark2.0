@@ -22,6 +22,7 @@ export const Textarea = forwardRef(({ className = "", voice, onTranscript, ...pr
 
   useEffect(() => {
     if (props.value !== undefined) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setInternalValue(props.value);
     }
   }, [props.value]);

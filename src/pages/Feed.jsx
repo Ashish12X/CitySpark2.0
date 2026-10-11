@@ -227,6 +227,7 @@ const Feed = () => {
   const [userCoords, setUserCoords] = useState(null);
   const [searchText, setSearchText] = useState('');
   const [viewMode, setViewMode] = useState('horizontal');
+  const [showResolved, setShowResolved] = useState(false);
 
   React.useEffect(() => {
     if ("geolocation" in navigator) {
@@ -245,37 +246,49 @@ const Feed = () => {
     { value: 'nearest', label: t('Nearest') }
   ];
 
-  const processedIssues = useMemo(() => [...issues]
-    .filter(i => {
-      if (nearbyOnly && effectiveCoords) {
-        return isWithinRadius({ lat: i.lat, lng: i.lng }, effectiveCoords, NEARBY_RADIUS_KM);
-      }
+  const processedIssues = useMemo(() => {
+    // First deduplicate by ID to ensure no duplicate issues are displayed
+    const seen = new Set();
+    const deduped = [...issues].filter(i => {
+      const id = String(i?.id);
+      if (seen.has(id)) return false;
+      seen.add(id);
       return true;
-    })
-    .filter(i => filter === 'All' ? true : i.category === filter)
-    .filter(i => {
-      if (!searchText.trim()) return true;
-      const q = searchText.toLowerCase();
-      return (
-        (i.title || '').toLowerCase().includes(q) ||
-        (i.description || '').toLowerCase().includes(q) ||
-        (i.location || '').toLowerCase().includes(q) ||
-        (i.address || '').toLowerCase().includes(q)
-      );
-    })
-    .filter(i => {
-      if (authorFilter === 'mine') return i.authorId === user?.id;
-      if (authorFilter === 'others') return i.authorId !== user?.id;
-      return true;
-    })
-    .sort((a, b) => {
-      if (sortBy === 'most_upvoted') {
-        const aVotes = a.upvotes !== undefined ? a.upvotes : (a.votes || 0);
-        const bVotes = b.upvotes !== undefined ? b.upvotes : (b.votes || 0);
-        return bVotes - aVotes;
-      }
-      return (b.id - a.id);
-    }), [issues, nearbyOnly, effectiveCoords, isWithinRadius, filter, searchText, authorFilter, user?.id, sortBy]);
+    });
+    
+    return deduped
+      .filter(i => {
+        if (nearbyOnly && effectiveCoords) {
+          return isWithinRadius({ lat: i.lat, lng: i.lng }, effectiveCoords, NEARBY_RADIUS_KM);
+        }
+        return true;
+      })
+      .filter(i => filter === 'All' ? true : i.category === filter)
+      .filter(i => showResolved ? i.progress === 'Resolved' : i.progress !== 'Resolved')
+      .filter(i => {
+        if (!searchText.trim()) return true;
+        const q = searchText.toLowerCase();
+        return (
+          (i.title || '').toLowerCase().includes(q) ||
+          (i.description || '').toLowerCase().includes(q) ||
+          (i.location || '').toLowerCase().includes(q) ||
+          (i.address || '').toLowerCase().includes(q)
+        );
+      })
+      .filter(i => {
+        if (authorFilter === 'mine') return i.authorId === user?.id;
+        if (authorFilter === 'others') return i.authorId !== user?.id;
+        return true;
+      })
+      .sort((a, b) => {
+        if (sortBy === 'most_upvoted') {
+          const aVotes = a.upvotes !== undefined ? a.upvotes : (a.votes || 0);
+          const bVotes = b.upvotes !== undefined ? b.upvotes : (b.votes || 0);
+          return bVotes - aVotes;
+        }
+        return (b.id - a.id);
+      });
+  }, [issues, nearbyOnly, effectiveCoords, isWithinRadius, filter, searchText, authorFilter, user?.id, sortBy, showResolved]);
 
   const myReportsCount = issues.filter((i) => i.authorId === user?.id).length;
   const nearbyCount = effectiveCoords
@@ -367,21 +380,44 @@ const Feed = () => {
             </div>
 
             <div className="flex flex-col xl:flex-row gap-3 xl:items-center xl:justify-between">
-              <div>
+              <div className="flex gap-2 xl:items-center">
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" className="rounded-xl border-primary/20 shadow-sm font-medium bg-secondary/50 min-w-[180px] justify-between">
+                      <span>{t(filter)}</span>
+                      <ChevronDown className="w-4 h-4 text-muted-foreground opacity-50" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start" className="w-[220px] rounded-xl">
+                    {[
+                      { key: 'All', label: t('All') },
+                      { key: 'Infrastructure', label: t('Infrastructure') },
+                      { key: 'Electricity', label: t('Electricity') },
+                      { key: 'Water', label: t('Water') },
+                      { key: 'Sanitation', label: t('Sanitation') },
+                    ].map(({ key, label }) => (
+                      <DropdownMenuItem
+                        key={key}
+                        onClick={() => setFilter(key)}
+                        className={`cursor-pointer rounded-lg ${filter === key ? 'bg-primary/10 text-primary font-medium' : ''}`}
+                      >
+                        {label}
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+
                 <div className="flex flex-wrap gap-2">
                   {[
-                    { key: 'All', label: t('All') },
-                    { key: 'Infrastructure', label: t('Infrastructure') },
-                    { key: 'Electricity', label: t('Electricity') },
-                    { key: 'Water', label: t('Water') },
-                    { key: 'Sanitation', label: t('Sanitation') },
-                  ].map(({ key, label }) => (
+                    { value: 'active', label: t('ACTIVE') },
+                    { value: 'resolved', label: t('RESOLVED') },
+                  ].map(opt => (
                     <button
-                      key={key}
-                      onClick={() => setFilter(key)}
-                      className={`px-4 py-2 rounded-xl text-sm font-medium text-left transition-all ${filter === key ? 'bg-primary text-primary-foreground shadow-sm' : 'bg-background hover:bg-muted text-muted-foreground hover:text-foreground'}`}
+                      key={opt.value}
+                      onClick={() => setShowResolved(opt.value === 'resolved')}
+                      className={`px-4 py-2 rounded-xl text-sm font-medium text-left transition-all ${(opt.value === 'resolved' ? showResolved : !showResolved) ? 'bg-primary text-primary-foreground shadow-sm' : 'bg-background hover:bg-muted text-muted-foreground hover:text-foreground'}`}
                     >
-                      {label}
+                      {opt.label}
                     </button>
                   ))}
                 </div>

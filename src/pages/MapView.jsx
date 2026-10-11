@@ -46,6 +46,28 @@ const userLocationIcon = L.divIcon({
   popupAnchor: [0, -16],
 });
 
+const rawMapToken = import.meta.env.VITE_MAPBOX_TOKEN || import.meta.env.VITE_MAP_API_KEY || '';
+const placeholderMapTokens = new Set([
+  'your_mapbox_public_token_here',
+  'your_map_api_key',
+  'api_key',
+  'placeholder',
+  'undefined',
+  'null',
+]);
+const hasValidMapboxToken = Boolean(
+  rawMapToken &&
+  rawMapToken.trim() &&
+  !placeholderMapTokens.has(rawMapToken.trim().toLowerCase())
+);
+const mapboxToken = hasValidMapboxToken ? rawMapToken.trim() : '';
+const mapTileUrl = mapboxToken
+  ? `https://api.mapbox.com/styles/v1/mapbox/streets-v11/tiles/{z}/{x}/{y}?access_token=${mapboxToken}`
+  : 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+const mapAttribution = mapboxToken
+  ? '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OSM</a> &copy; Mapbox'
+  : '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OSM</a>';
+
 const StatusBadge = ({ status, t }) => {
   switch(status) {
     case 'Reported':
@@ -115,8 +137,11 @@ const MapView = () => {
         zoomControl={true}
       >
         <TileLayer
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>'
-          url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
+          attribution={mapAttribution}
+          url={mapTileUrl}
+          maxZoom={19}
+          minZoom={2}
+          noWrap={false}
         />
         {issues.map(issue => (
           issue.lat && issue.lng ? (

@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { Issue } from '../models/Issue.js';
 import { User } from '../models/User.js';
+import { Notification } from '../models/Notification.js';
 import { requireAuth } from '../middleware/auth.js';
 import * as AIService from '../services/AIService.js';
 
@@ -317,16 +318,231 @@ router.patch('/:issueId/resolve', requireAuth, async (req, res) => {
 // User Verification
 router.post('/:issueId/verify', requireAuth, async (req, res) => {
   try {
-    const { status, comment } = req.body; 
+    const { status, comment } = req.body;
     const issueId = Number(req.params.issueId);
-    
+
+    if (!['Verified', 'Rejected'].includes(status)) {
+      return res.status(400).json({ error: 'status must be Verified or Rejected' });
+    }
+
     const issue = await Issue.findOne({ id: issueId });
     if (!issue || issue.progress !== 'Resolved') return res.status(400).json({ error: 'Issue must be resolved to verify' });
 
+    if (String(issue.authorId) !== String(req.user.id)) {
+      return res.status(403).json({ error: 'Only the reporting user can verify this issue' });
+    }
+
+    const cleanComment = String(comment || '').trim();
+    if (status === 'Rejected' && !cleanComment) {
+      return res.status(400).json({ error: 'Please provide a rejection message for admin review' });
+    }
+
     issue.verificationStatus = status;
+    issue.verificationComment = cleanComment;
+    issue.verificationBy = req.user.id;
+
+    if (status === 'Verified') {
+      issue.verifiedAt = new Date();
+      issue.needsAdminReview = false;
+      issue.adminReviewNote = '';
+      issue.adminReviewedAt = undefined;
+      issue.adminReviewedBy = undefined;
+    } else {
+      issue.rejectedAt = new Date();
+      issue.needsAdminReview = true;
+      issue.progress = 'In Progress';
+
+      const admins = await User.find({ role: 'admin' }).select('_id').lean();
+      for (const admin of admins) {
+        const adminId = String(admin._id);
+        const maxDoc = await Notification.findOne({ userId: adminId }).sort({ id: -1 }).select('id').lean();
+        const nextId = maxDoc?.id != null ? maxDoc.id + 1 : 1;
+        await Notification.create({
+          userId: adminId,
+          id: nextId,
+          type: 'warning',
+          read: false,
+          message: `Rework requested by reporter for issue [${issue.title}]. Message: ${cleanComment}`,
+        });
+      }
+    }
+
     await issue.save();
-    
-    res.json({ message: 'Verification recorded', status });
+
+    res.json({ message: 'Verification recorded', status, issue });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+router.patch('/:issueId/admin-review', requireAuth, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Admin access required' });
+    }
+
+    const issue = await Issue.findOne({ id: Number(req.params.issueId) });
+    if (!issue) return res.status(404).json({ error: 'Issue not found' });
+
+    const action = String(req.body?.action || 'review').trim();
+    if (!['review', 'mark_completed'].includes(action)) {
+      return res.status(400).json({ error: 'action must be "review" or "mark_completed"' });
+    }
+
+    issue.needsAdminReview = false;
+    issue.adminReviewNote = String(req.body?.note || '').trim();
+    issue.adminReviewedAt = new Date();
+    issue.adminReviewedBy = req.user.id;
+
+    if (action === 'mark_completed') {
+      issue.progress = 'Resolved';
+      issue.verificationStatus = 'Verified';
+      issue.resolutionStatus = 'admin_override';
+      issue.verifiedAt = new Date();
+      issue.rejectedAt = undefined;
+    }
+
+    await issue.save();
+    res.json(issue);
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// User Appeals for Resolved Issues
+router.post('/:issueId/appeal', requireAuth, async (req, res) => {
+  try {
+    const { message } = req.body;
+    const issueId = Number(req.params.issueId);
+
+    if (!message || !String(message).trim()) {
+      return res.status(400).json({ error: 'Message is required for appeal' });
+    }
+
+    const issue = await Issue.findOne({ id: issueId });
+    if (!issue) return res.status(404).json({ error: 'Issue not found' });
+
+    if (issue.progress !== 'Resolved') {
+      return res.status(400).json({ error: 'Can only appeal resolved issues' });
+    }
+
+    if (String(issue.authorId) !== String(req.user.id)) {
+      return res.status(403).json({ error: 'Only the reporting user can appeal this issue' });
+    }
+
+    // Create new appeal
+    const maxAppeal = issue.appeals && issue.appeals.length > 0 
+      ? Math.max(...issue.appeals.map(a => a.id || 0))
+      : 0;
+
+    const newAppeal = {
+      id: maxAppeal + 1,
+      userId: req.user.id,
+      userName: req.user.name || 'User',
+      message: String(message).trim(),
+      timestamp: new Date(),
+      status: 'pending',
+      adminAction: 'none',
+      adminNote: '',
+    };
+
+    if (!Array.isArray(issue.appeals)) {
+      issue.appeals = [];
+    }
+    issue.appeals.push(newAppeal);
+
+    // Notify admins
+    const admins = await User.find({ role: 'admin' }).select('_id').lean();
+    for (const admin of admins) {
+      const adminId = String(admin._id);
+      const maxDoc = await Notification.findOne({ userId: adminId }).sort({ id: -1 }).select('id').lean();
+      const nextId = maxDoc?.id != null ? maxDoc.id + 1 : 1;
+      await Notification.create({
+        userId: adminId,
+        id: nextId,
+        type: 'alert',
+        read: false,
+        message: `Resolution dispute: User appealed completion of "${issue.title}". Appeal message: "${newAppeal.message}"`,
+      });
+    }
+
+    await issue.save();
+    res.json({ message: 'Appeal filed successfully', appeal: newAppeal, issue });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// Admin Handles Appeal (Reassign or Admin Override)
+router.put('/:issueId/appeal/:appealId/action', requireAuth, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Admin access required' });
+    }
+
+    const { action, note, authorityId } = req.body;
+    const issueId = Number(req.params.issueId);
+    const appealId = Number(req.params.appealId);
+
+    if (!['reassigned', 'admin_override'].includes(action)) {
+      return res.status(400).json({ error: 'action must be "reassigned" or "admin_override"' });
+    }
+
+    const issue = await Issue.findOne({ id: issueId });
+    if (!issue) return res.status(404).json({ error: 'Issue not found' });
+
+    const appeal = issue.appeals?.find(a => a.id === appealId);
+    if (!appeal) return res.status(404).json({ error: 'Appeal not found' });
+
+    // Update appeal
+    appeal.status = 'reviewed';
+    appeal.adminAction = action;
+    appeal.adminNote = String(note || '').trim();
+    appeal.adminReviewedAt = new Date();
+    appeal.adminReviewedBy = req.user.id;
+
+    if (action === 'reassigned') {
+      // Reopen issue and reassign
+      if (!authorityId) {
+        return res.status(400).json({ error: 'authorityId is required for reassignment' });
+      }
+
+      const targetAuthority = await User.findOne({ _id: authorityId, role: 'authority' })
+        .select('_id name authorityLevel')
+        .lean();
+      if (!targetAuthority) {
+        return res.status(400).json({ error: 'Target authority not found' });
+      }
+
+      issue.progress = 'In Progress';
+      issue.resolutionStatus = 'reopened';
+      issue.assignedTo = authorityId;
+      issue.assignedToName = targetAuthority.name;
+      issue.assignedBy = req.user.id;
+      issue.assignmentNote = `Admin reopened: ${appeal.adminNote || 'Resolution was inadequate'}`;
+      issue.completionImg = '';
+      issue.completionDescription = '';
+      issue.completedAt = undefined;
+      issue.verificationStatus = 'Pending';
+
+      // Notify the new authority
+      const maxDoc = await Notification.findOne({ userId: authorityId }).sort({ id: -1 }).select('id').lean();
+      const nextId = maxDoc?.id != null ? maxDoc.id + 1 : 1;
+      await Notification.create({
+        userId: String(authorityId),
+        id: nextId,
+        type: 'alert',
+        read: false,
+        message: `Issue "${issue.title}" reassigned to you due to user appeal. Previous work was deemed inadequate.`,
+      });
+    } else if (action === 'admin_override') {
+      // Keep as resolved, but mark admin override
+      issue.resolutionStatus = 'admin_override';
+      // Don't change progress, stay Resolved
+    }
+
+    await issue.save();
+    res.json({ message: 'Appeal action completed', appeal, issue });
   } catch (e) {
     res.status(400).json({ error: e.message });
   }

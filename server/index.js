@@ -25,7 +25,7 @@ app.get('/api/bootstrap', async (_req, res) => {
     const issueList = issues.map((i) => {
       votes[i.id] = i.voteMap && typeof i.voteMap === 'object' ? { ...i.voteMap } : {};
       comments[i.id] = Array.isArray(i.comments) ? i.comments : [];
-      const { _id, voteMap, comments: _c, __v, ...rest } = i;
+      const { _id, voteMap: _voteMap, comments: _c, __v, ...rest } = i;
       return rest;
     });
 
@@ -41,25 +41,42 @@ app.use('/api/notifications', notificationsRouter);
 app.use('/api/dashboard', dashboardRouter);
 app.use('/api/ai', aiRouter);
 
-const PORT = Number(process.env.PORT) || 5000;
+const candidatePorts = [Number(process.env.PORT) || 5000, 5001, 5002, 5003, 5004];
+const uniquePorts = [...new Set(candidatePorts.filter((port) => Number.isInteger(port) && port > 0))];
 
 connectDb()
   .then(() => {
     const HOST = process.env.HOST || '0.0.0.0';
-    const server = app.listen(PORT, HOST, () => {
-      console.log(`CitySpark API listening on ${HOST}:${PORT}`);
-    });
-    server.on('error', (err) => {
-      if (err.code === 'EADDRINUSE') {
-        console.error(
-          `\nPort ${PORT} is already in use (another CitySpark server or app is running).\n` +
-            `  • Stop it:  netstat -ano | findstr :${PORT}   then   taskkill /PID <pid> /F\n` +
-            `  • Or use another port: set PORT=5001 in server/.env and update Vite proxy if needed.\n`
-        );
-        process.exit(1);
-      }
-      throw err;
-    });
+    let portIndex = 0;
+
+    const startServer = (port) => {
+      process.env.PORT = String(port);
+      const server = app.listen(port, HOST, () => {
+        console.log(`CitySpark API listening on http://${HOST}:${port}`);
+      });
+
+      server.on('error', (err) => {
+        if (err.code === 'EADDRINUSE' && portIndex < uniquePorts.length - 1) {
+          const nextPort = uniquePorts[portIndex + 1];
+          portIndex += 1;
+          console.warn(`Port ${port} is busy, retrying on ${nextPort}...`);
+          startServer(nextPort);
+          return;
+        }
+
+        if (err.code === 'EADDRINUSE') {
+          console.error(
+            `\nUnable to start CitySpark API. Ports ${uniquePorts.join(', ')} are all in use.\n` +
+            `  • Stop the other app or set a free PORT value before starting the server.\n`
+          );
+          process.exit(1);
+        }
+
+        throw err;
+      });
+    };
+
+    startServer(uniquePorts[0]);
   })
   .catch((err) => {
     console.error('Failed to start:', err);

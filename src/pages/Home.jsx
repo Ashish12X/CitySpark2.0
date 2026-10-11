@@ -24,7 +24,7 @@ const getColorClasses = (color) => {
 };
 
 // eslint-disable-next-line no-unused-vars
-const StatCard = ({ icon: Icon, label, value, trend, color = 'blue' }) => {
+const StatCard = ({ icon: Icon, label, value, color = 'blue' }) => {
   const classes = getColorClasses(color);
   return (
     <motion.div
@@ -37,7 +37,6 @@ const StatCard = ({ icon: Icon, label, value, trend, color = 'blue' }) => {
         <div className={`h-12 w-12 rounded-xl flex items-center justify-center ${classes.icon} ${classes.text}`}>
           <Icon className="h-6 w-6" />
         </div>
-        {trend && <span className="text-xs font-bold text-emerald-600 bg-emerald-50 dark:bg-emerald-900/30 px-2 py-1 rounded-full">+ {trend}</span>}
       </div>
       <p className="text-sm text-muted-foreground font-medium mb-1">{label}</p>
       <p className="text-3xl font-black tracking-tight">{value}</p>
@@ -121,10 +120,10 @@ const Home = () => {
           <p className="text-muted-foreground">{t('This is what your community is working on together.')}</p>
         </div>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <StatCard icon={FileText} label={t('Total Reports')} value={stats.reported} trend={`${Math.floor(stats.reported / 5)}%`} color="blue" />
+          <StatCard icon={FileText} label={t('Total Reports')} value={stats.reported} color="blue" />
           <StatCard icon={AlertTriangle} label={t('In Progress')} value={stats.inProgress} color="amber" />
-          <StatCard icon={CheckCircle} label={t('Resolved')} value={stats.resolved} trend={`${Math.floor(stats.resolved / 2)}%`} color="emerald" />
-          <StatCard icon={TrendingUp} label={t('My Reports')} value={stats.userIssues} trend={`+${Math.max(0, stats.userIssues - 2)}`} color="purple" />
+          <StatCard icon={CheckCircle} label={t('Resolved')} value={stats.resolved} color="emerald" />
+          <StatCard icon={TrendingUp} label={t('My Reports')} value={stats.userIssues} color="purple" />
         </div>
       </section>
 

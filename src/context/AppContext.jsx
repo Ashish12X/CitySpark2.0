@@ -127,17 +127,101 @@ const MOCK_ISSUES = [
   },
 ];
 
+const MOJIBAKE_MARKERS = /(?:Ã.|Â.|â€|ðŸ|à.|Ù.|Ø.|�)/;
+
+function countMojibakeNoise(value) {
+  return (String(value || '').match(MOJIBAKE_MARKERS) || []).length;
+}
+
+function repairMojibake(value) {
+  if (typeof value !== 'string' || !value) return value;
+  if (!MOJIBAKE_MARKERS.test(value)) return value;
+
+  try {
+    const bytes = Uint8Array.from(Array.from(value), (ch) => ch.charCodeAt(0) & 0xff);
+    const decodedViaBytes = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+
+    let decodedViaLatin1 = value;
+    try {
+      decodedViaLatin1 = decodeURIComponent(escape(value));
+    } catch {
+      decodedViaLatin1 = value;
+    }
+
+    const candidates = [value, decodedViaBytes, decodedViaLatin1];
+    const best = candidates.sort((a, b) => countMojibakeNoise(a) - countMojibakeNoise(b))[0];
+    return best;
+  } catch {
+    return value;
+  }
+}
+
+function sanitizeLocalizedMap(map, fallback) {
+  if (!map || typeof map !== 'object') return map;
+  const out = { ...map };
+  Object.keys(out).forEach((lang) => {
+    const fixed = repairMojibake(out[lang]);
+    out[lang] = countMojibakeNoise(fixed) > 0 ? fallback : fixed;
+  });
+  return out;
+}
+
+function sanitizeIssueText(issue) {
+  const baseTitle = repairMojibake(issue?.title || '');
+  const baseDescription = repairMojibake(issue?.description || '');
+  return {
+    ...issue,
+    title: baseTitle,
+    description: baseDescription,
+    titles: sanitizeLocalizedMap(issue?.titles, baseTitle),
+    descriptions: sanitizeLocalizedMap(issue?.descriptions, baseDescription),
+  };
+}
+
+// Deduplication helper to remove duplicate issues by ID
+function deduplicateIssues(issues) {
+  if (!Array.isArray(issues)) return [];
+  const seen = new Set();
+  return issues.filter(issue => {
+    const id = String(issue?.id);
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+}
+
 function loadLocalIssues() {
   const saved = localStorage.getItem('cityspark_issues');
   let issues = saved ? JSON.parse(saved) : [...MOCK_ISSUES];
   if (!issues.find(i => i.id === 10)) {
     issues.push(MOCK_ISSUES.find(i => i.id === 10));
   }
-  return issues;
+  // Deduplicate before returning
+  return deduplicateIssues(issues.map(sanitizeIssueText));
 }
 
 function notificationsStorageKey(userId) {
   return `cityspark_notifications_${userId}`;
+}
+
+function normalizeEntityId(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'string' || typeof value === 'number') {
+    const normalized = String(value).trim();
+    return normalized || null;
+  }
+  if (typeof value === 'object') {
+    const candidate = value.$oid || value._id || value.id;
+    if (candidate !== undefined && candidate !== null) {
+      const normalized = String(candidate).trim();
+      return normalized || null;
+    }
+    if (typeof value.toString === 'function') {
+      const normalized = String(value.toString()).trim();
+      if (normalized && normalized !== '[object Object]') return normalized;
+    }
+  }
+  return null;
 }
 
 function defaultWelcomeNotification() {
@@ -223,7 +307,8 @@ export const AppProvider = ({ children }) => {
       try {
         const data = await apiJson('/api/bootstrap');
         if (cancelled) return;
-        setIssues(data.issues || []);
+        // Deduplicate issues from API before setting
+        setIssues(deduplicateIssues((data.issues || []).map(sanitizeIssueText)));
         setVotes(data.votes || {});
         setComments(data.comments || {});
         setUseRemoteDb(true);
@@ -292,15 +377,16 @@ export const AppProvider = ({ children }) => {
   }, [comments, useRemoteDb]);
 
   const awardPoints = useCallback((userId, amount, reason) => {
-    if (!userId) {
+    const normalizedUserId = normalizeEntityId(userId);
+    if (!normalizedUserId) {
       console.warn('[AppContext] awardPoints failed: No userId provided');
       return;
     }
     
-    console.log(`[AppContext] Awarding ${amount} points to User ${userId} for: ${reason}`);
+    console.log(`[AppContext] Awarding ${amount} points to User ${normalizedUserId} for: ${reason}`);
     
     setUserStats(prev => {
-      const stats = prev[userId] || { points: 0, badges: [], trustScore: 50 };
+      const stats = prev[normalizedUserId] || { points: 0, badges: [], trustScore: 50 };
       const newPoints = stats.points + amount;
       
       // Dynamic Trust Score Logic
@@ -310,8 +396,8 @@ export const AppProvider = ({ children }) => {
       const newTrust = Math.min(Math.max((stats.trustScore || 50) + trustAdjustment, 0), 100);
 
       const newBadges = checkBadges(newPoints);
-      const newState = { ...prev, [userId]: { points: newPoints, badges: newBadges, trustScore: newTrust } };
-      console.log(`[AppContext] Updated UserStats for ${userId}:`, newState[userId]);
+      const newState = { ...prev, [normalizedUserId]: { points: newPoints, badges: newBadges, trustScore: newTrust } };
+      console.log(`[AppContext] Updated UserStats for ${normalizedUserId}:`, newState[normalizedUserId]);
       return newState;
     });
 
@@ -322,7 +408,7 @@ export const AppProvider = ({ children }) => {
     if (!issue || !['Verified', 'Rejected'].includes(outcomeStatus)) return;
 
     const voteMap = votes?.[issue.id] || issue.voteMap || {};
-    const reporterId = issue.authorId;
+    const reporterId = normalizeEntityId(issue.authorId);
 
     // Reporter gets points only when the report is genuinely completed and verified.
     if (outcomeStatus === 'Verified' && reporterId) {
@@ -477,13 +563,13 @@ export const AppProvider = ({ children }) => {
         try {
           const { authorId: _a, ...payload } = enrichedIssue;
           const created = await apiJson('/api/issues', { method: 'POST', body: { ...payload, priority_score: priorityScore, priority_label: priorityLabel, prediction, escalation } });
-          setIssues((prev) => [{ ...created, upvotes: created.upvotes ?? 0, downvotes: created.downvotes ?? 0 }, ...prev]);
+          setIssues((prev) => deduplicateIssues([{ ...created, upvotes: created.upvotes ?? 0, downvotes: created.downvotes ?? 0 }, ...prev]));
           return created;
         } catch (e) { console.error('addIssue', e); }
         return;
       }
       const newIssue = { ...enrichedIssue, id: Date.now(), upvotes: 0, downvotes: 0, progress: 'Reported', priorityScore, priorityLabel, prediction, escalation, createdAt: new Date().toISOString() };
-      setIssues((prev) => [newIssue, ...prev]);
+      setIssues((prev) => deduplicateIssues([newIssue, ...prev]));
       if (issue.lat && issue.lng) addNotification(`New Issue Reported Nearby: ${issue.title}`, 'nearby');
       if (escalation) addNotification(`Urgent: ${escalation.message}`, 'warning');
       else if (prediction) addNotification(`AI Insight: ${prediction.message}`, 'info');
@@ -580,31 +666,54 @@ export const AppProvider = ({ children }) => {
 
   const verifyIssue = useCallback(
     async (issueId, status, comment) => {
-      const targetIssue = issues.find((i) => i.id === issueId);
+      const targetIssue = issues.find((i) => String(i.id) === String(issueId));
       const previousStatus = targetIssue?.verificationStatus;
       const shouldSettle = ['Verified', 'Rejected'].includes(status) && previousStatus !== status;
 
       if (useRemoteDb) {
         try {
           const res = await apiJson(`/api/issues/${issueId}/verify`, { method: 'POST', body: { status, comment } });
-          setIssues((prev) => prev.map((i) => (i.id === issueId ? { ...i, verificationStatus: status, pointsOutcomeApplied: shouldSettle ? status : i.pointsOutcomeApplied } : i)));
+          setIssues((prev) => prev.map((i) => {
+            if (String(i.id) !== String(issueId)) return i;
+            const merged = { ...i, ...(res?.issue || {}), verificationStatus: status, pointsOutcomeApplied: shouldSettle ? status : i.pointsOutcomeApplied };
+            return merged;
+          }));
           if (shouldSettle && targetIssue) settleIssueOutcomePoints(targetIssue, status);
-          addNotification(`Verification recorded for Issue #${issueId}`, 'success');
+          addNotification(status === 'Rejected' ? `Rework request sent to admin for Issue #${issueId}` : `Verification recorded for Issue #${issueId}`, status === 'Rejected' ? 'warning' : 'success');
           return res;
         } catch (e) { console.error(e); }
       }
       setIssues(prev => prev.map(i => {
-        if (i.id === issueId) {
+        if (String(i.id) === String(issueId)) {
           if (status === 'Rejected') {
             addNotification(`Escalation Alert: Issue [${i.title}] fix rejected by user. Re-assigning...`, 'warning');
             addAuditLog(i.id, 'Resolution Rejected', user?.id || 'User', 'Resolved', 'In Progress');
             const newScore = Math.min((i.priorityScore || 50) + 25, 100);
-            return { ...i, verificationStatus: 'Rejected', progress: 'In Progress', priorityScore: newScore, priorityLabel: getPriorityLabel(newScore), pointsOutcomeApplied: shouldSettle ? 'Rejected' : i.pointsOutcomeApplied };
+            return {
+              ...i,
+              verificationStatus: 'Rejected',
+              verificationComment: comment,
+              verificationBy: user?.id,
+              rejectedAt: new Date().toISOString(),
+              needsAdminReview: true,
+              progress: 'In Progress',
+              priorityScore: newScore,
+              priorityLabel: getPriorityLabel(newScore),
+              pointsOutcomeApplied: shouldSettle ? 'Rejected' : i.pointsOutcomeApplied,
+            };
           }
           if (status === 'Verified') {
              addAuditLog(i.id, 'User Verified Fix', user?.id || 'User', 'Resolved', 'Closed (Verified)');
           }
-          return { ...i, verificationStatus: status, pointsOutcomeApplied: shouldSettle ? status : i.pointsOutcomeApplied };
+          return {
+            ...i,
+            verificationStatus: status,
+            verificationComment: comment,
+            verificationBy: user?.id,
+            verifiedAt: status === 'Verified' ? new Date().toISOString() : i.verifiedAt,
+            needsAdminReview: status === 'Rejected' ? true : false,
+            pointsOutcomeApplied: shouldSettle ? status : i.pointsOutcomeApplied,
+          };
         }
         return i;
       }));
@@ -614,11 +723,168 @@ export const AppProvider = ({ children }) => {
     [useRemoteDb, addNotification, user?.id, issues, settleIssueOutcomePoints]
   );
 
+  const adminReviewIssue = useCallback(
+    async (issueId, note = '', action = 'review') => {
+      const targetIssue = issues.find((i) => String(i.id) === String(issueId));
+      const shouldSettleVerified = action === 'mark_completed' && targetIssue?.verificationStatus !== 'Verified';
+
+      if (useRemoteDb) {
+        try {
+          const updated = await apiJson(`/api/issues/${issueId}/admin-review`, {
+            method: 'PATCH',
+            body: { note, action },
+          });
+          setIssues((prev) => prev.map((i) => (String(i.id) === String(issueId) ? { ...i, ...updated } : i)));
+          if (shouldSettleVerified && targetIssue) {
+            settleIssueOutcomePoints(targetIssue, 'Verified');
+          }
+          return updated;
+        } catch (e) {
+          console.error(e);
+          throw e;
+        }
+      }
+
+      setIssues((prev) => prev.map((i) => {
+        if (String(i.id) !== String(issueId)) return i;
+        const base = {
+          ...i,
+          needsAdminReview: false,
+          adminReviewNote: note,
+          adminReviewedAt: new Date().toISOString(),
+          adminReviewedBy: user?.id,
+        };
+
+        if (action === 'mark_completed') {
+          return {
+            ...base,
+            progress: 'Resolved',
+            verificationStatus: 'Verified',
+            resolutionStatus: 'admin_override',
+            verifiedAt: new Date().toISOString(),
+            rejectedAt: undefined,
+          };
+        }
+
+        return base;
+      }));
+
+      if (shouldSettleVerified && targetIssue) {
+        settleIssueOutcomePoints(targetIssue, 'Verified');
+      }
+    },
+    [useRemoteDb, user?.id, issues, settleIssueOutcomePoints]
+  );
+
+  const fileAppeal = useCallback(
+    async (issueId, message) => {
+      if (useRemoteDb) {
+        try {
+          const updated = await apiJson(`/api/issues/${issueId}/appeal`, {
+            method: 'POST',
+            body: { message },
+          });
+          setIssues((prev) => prev.map((i) => (String(i.id) === String(issueId) ? { ...i, ...updated.issue } : i)));
+          return updated;
+        } catch (e) {
+          console.error(e);
+          throw e;
+        }
+      }
+
+      setIssues((prev) => prev.map((i) => {
+        if (String(i.id) !== String(issueId)) return i;
+        const maxAppeal = i.appeals && i.appeals.length > 0 
+          ? Math.max(...i.appeals.map(a => a.id || 0))
+          : 0;
+        return {
+          ...i,
+          appeals: [
+            ...(i.appeals || []),
+            {
+              id: maxAppeal + 1,
+              userId: user?.id,
+              userName: user?.name,
+              message,
+              timestamp: new Date().toISOString(),
+              status: 'pending',
+              adminAction: 'none',
+              adminNote: '',
+            },
+          ],
+        };
+      }));
+    },
+    [useRemoteDb, user?.id, user?.name]
+  );
+
+  const handleAppealAction = useCallback(
+    async (issueId, appealId, action, note, authorityId) => {
+      if (useRemoteDb) {
+        try {
+          const updated = await apiJson(`/api/issues/${issueId}/appeal/${appealId}/action`, {
+            method: 'PUT',
+            body: { action, note, authorityId },
+          });
+          setIssues((prev) => prev.map((i) => (String(i.id) === String(issueId) ? { ...i, ...updated.issue } : i)));
+          return updated;
+        } catch (e) {
+          console.error(e);
+          throw e;
+        }
+      }
+
+      setIssues((prev) => prev.map((i) => {
+        if (String(i.id) !== String(issueId)) return i;
+        const updatedAppeals = (i.appeals || []).map((a) => {
+          if (a.id === appealId) {
+            return {
+              ...a,
+              status: 'reviewed',
+              adminAction: action,
+              adminNote: note,
+              adminReviewedAt: new Date().toISOString(),
+              adminReviewedBy: user?.id,
+            };
+          }
+          return a;
+        });
+
+        let updated = {
+          ...i,
+          appeals: updatedAppeals,
+        };
+
+        if (action === 'reassigned') {
+          updated = {
+            ...updated,
+            progress: 'In Progress',
+            resolutionStatus: 'reopened',
+            assignedTo: authorityId,
+            assignmentNote: `Admin reopened: ${note || 'Resolution was inadequate'}`,
+            completionImg: '',
+            completionDescription: '',
+            completedAt: undefined,
+            verificationStatus: 'Pending',
+          };
+        } else if (action === 'admin_override') {
+          updated = {
+            ...updated,
+            resolutionStatus: 'admin_override',
+          };
+        }
+
+        return updated;
+      }));
+    },
+    [useRemoteDb, user?.id]
+  );
+
   return (
     <AppContext.Provider
       value={{
         issues, addIssue, voteIssue, votes, notifications, markNotificationRead, markAllRead, clearNotification, addNotification, comments, addComment, userStats, useRemoteDb,
-        assignIssue, resolveIssue, verifyIssue, isWithinRadius,
+        assignIssue, resolveIssue, verifyIssue, adminReviewIssue, fileAppeal, handleAppealAction, isWithinRadius,
       }}
     >
       {children}

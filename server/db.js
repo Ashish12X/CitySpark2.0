@@ -1,4 +1,3 @@
-/* global process */
 import mongoose from 'mongoose';
 import { seedIfEmpty, migrateNotificationsToPerUser, ensureLowerAuthorityAccounts } from './seed.js';
 

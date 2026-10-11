@@ -62,7 +62,7 @@ const LOCAL_GUIDANCE_KB = [
     matched_service: 'PAN Card Application',
     department: 'Income Tax Department (NSDL/UTIITSL)',
     where_to_go: 'NSDL or UTIITSL PAN portal',
-    location: 'https://www.onlineservices.nsdl.com/paam/endUserRegisterContact.html',
+    location: 'https://www.utiitsl.com/',
     documents: ['Proof of Identity', 'Proof of Address', 'Date of Birth Proof', 'Photo/Signature as required'],
     steps: ['Open PAN portal and select New PAN (Form 49A)', 'Fill application details as per official documents', 'Upload documents and complete verification', 'Pay application fee and submit', 'Track acknowledgment and download/receive PAN'],
     important_points: ['Use official portal only', 'Name and DOB must exactly match your ID proofs'],
@@ -309,6 +309,8 @@ const matchLocalGuidance = (query) => {
   };
 };
 
+const isHttpUrl = (value = '') => /^https?:\/\//i.test(String(value).trim());
+
 export default function AICivicAssistant() {
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("");
@@ -350,7 +352,6 @@ export default function AICivicAssistant() {
     <section className="container mx-auto px-4 py-8 lg:py-10 max-w-7xl grid grid-cols-1 xl:grid-cols-[390px_minmax(0,1fr)] gap-5">
       <Card className="xl:sticky xl:top-24 h-fit bg-card/90 backdrop-blur-sm border border-border/50 hover:border-primary/40 transition-shadow shadow-sm rounded-2xl">
         <CardHeader className="border-b pb-4">
-          <CardTitle className="text-2xl font-bold">{t('AI Civic Assistant')}</CardTitle>
         </CardHeader>
         <CardContent className="p-5">
           <form onSubmit={handleSubmit} className="space-y-4">
@@ -442,6 +443,16 @@ export default function AICivicAssistant() {
                   <div className="rounded-xl border border-orange-200 bg-orange-50/60 p-3">
                     <p className="text-[11px] uppercase tracking-wide text-orange-700 font-semibold mb-1">{t('Where to Go')}</p>
                     <p className="text-sm font-medium">{t(response.where_to_go || response.location)}</p>
+                    {isHttpUrl(response.location) && (
+                      <a
+                        href={response.location}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center mt-2 text-sm font-semibold text-orange-700 hover:underline"
+                      >
+                        {t('Open Official Portal')}
+                      </a>
+                    )}
                     <p className="text-[11px] text-orange-700/80 mt-1 inline-flex items-center gap-1"><Wallet className="w-3.5 h-3.5" />{t(response.estimated_fees || 'Varies by service')}</p>
                   </div>
                 </div>

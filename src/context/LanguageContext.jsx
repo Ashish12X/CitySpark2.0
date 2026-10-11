@@ -4,6 +4,7 @@ import { translateWithGemini } from '../services/GeminiService';
 import { UI_LANGUAGES, DICTIONARIES } from './translations';
 
 const LanguageContext = createContext();
+const TRANSLATION_CACHE_VERSION = 'v11';
 
 const STATIC_EN = {
   notifications: 'Notifications',
@@ -38,12 +39,62 @@ const STATIC_EN = {
 
 const SLEEP_MS = 400; 
 
+const MOJIBAKE_MARKERS = /(?:Ã.|Â.|â€|ðŸ|à.|Ù.|Ø.|�)/;
+
+function countMojibakeNoise(value) {
+  return (String(value || '').match(MOJIBAKE_MARKERS) || []).length;
+}
+
+function repairMojibake(value) {
+  if (typeof value !== 'string' || !value) return value;
+  if (!MOJIBAKE_MARKERS.test(value)) return value;
+
+  try {
+    const bytes = Uint8Array.from(Array.from(value), (ch) => ch.charCodeAt(0) & 0xff);
+    const decodedViaBytes = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+
+    let decodedViaLatin1 = value;
+    try {
+      // Common fix path for UTF-8 text that was decoded as Latin-1/Windows-1252.
+      decodedViaLatin1 = decodeURIComponent(escape(value));
+    } catch {
+      decodedViaLatin1 = value;
+    }
+
+    const candidates = [value, decodedViaBytes, decodedViaLatin1];
+    const best = candidates.sort((a, b) => countMojibakeNoise(a) - countMojibakeNoise(b))[0];
+    return best;
+  } catch {
+    return value;
+  }
+}
+
+function safeRenderText(candidate, fallback = '') {
+  const fixed = repairMojibake(candidate);
+  return countMojibakeNoise(fixed) > 0 ? fallback : fixed;
+}
+
+function sanitizeSavedTranslations(raw = {}) {
+  const cleaned = {};
+  for (const [k, v] of Object.entries(raw || {})) {
+    if (typeof v !== 'string') continue;
+    const fixed = repairMojibake(v);
+    if (countMojibakeNoise(fixed) === 0) cleaned[k] = fixed;
+  }
+  return cleaned;
+}
+
 export const LanguageProvider = ({ children }) => {
   const [language, setLanguage] = useState(() => localStorage.getItem('cityspark_lang') || 'en');
   
   const [translations, setTranslations] = useState(() => {
-    const saved = localStorage.getItem(`cityspark_trans_v10_${language}`);
-    return saved ? JSON.parse(saved) : {};
+    const saved = localStorage.getItem(`cityspark_trans_${TRANSLATION_CACHE_VERSION}_${language}`);
+    if (!saved) return {};
+    try {
+      return sanitizeSavedTranslations(JSON.parse(saved));
+    } catch {
+      return {};
+    }
   });
   
   const queueRef = useRef([]);
@@ -54,8 +105,17 @@ export const LanguageProvider = ({ children }) => {
   useEffect(() => {
     currentLanguageRef.current = language;
     localStorage.setItem('cityspark_lang', language);
-    const saved = localStorage.getItem(`cityspark_trans_v10_${language}`);
-    setTranslations(saved ? JSON.parse(saved) : {});
+    const saved = localStorage.getItem(`cityspark_trans_${TRANSLATION_CACHE_VERSION}_${language}`);
+    let next = {};
+    if (saved) {
+      try {
+        next = sanitizeSavedTranslations(JSON.parse(saved));
+      } catch {
+        next = {};
+      }
+    }
+    setTranslations(next);
+    localStorage.setItem(`cityspark_trans_${TRANSLATION_CACHE_VERSION}_${language}`, JSON.stringify(next));
     queueRef.current = [];
     loadingKeysRef.current.clear();
   }, [language]);
@@ -87,8 +147,10 @@ export const LanguageProvider = ({ children }) => {
         if (currentLanguageRef.current === targetLang && result && result !== key) {
           setTranslations(prev => {
             if (currentLanguageRef.current !== targetLang) return prev;
-            const updated = { ...prev, [key]: result };
-            localStorage.setItem(`cityspark_trans_v10_${targetLang}`, JSON.stringify(updated));
+            const safeResult = safeRenderText(result, '');
+            if (!safeResult) return prev;
+            const updated = { ...prev, [key]: safeResult };
+            localStorage.setItem(`cityspark_trans_${TRANSLATION_CACHE_VERSION}_${targetLang}`, JSON.stringify(updated));
             return updated;
           });
         }
@@ -97,8 +159,10 @@ export const LanguageProvider = ({ children }) => {
         const fallback = await translateWithGemini(key, targetLang);
         if (fallback && currentLanguageRef.current === targetLang) {
           setTranslations(prev => {
-            const updated = { ...prev, [key]: fallback };
-            localStorage.setItem(`cityspark_trans_v10_${targetLang}`, JSON.stringify(updated));
+            const safeFallback = safeRenderText(fallback, '');
+            if (!safeFallback) return prev;
+            const updated = { ...prev, [key]: safeFallback };
+            localStorage.setItem(`cityspark_trans_${TRANSLATION_CACHE_VERSION}_${targetLang}`, JSON.stringify(updated));
             return updated;
           });
         }
@@ -116,15 +180,24 @@ export const LanguageProvider = ({ children }) => {
 
   const t = useCallback((text) => {
     if (!text) return '';
-    if (language === 'en') return STATIC_EN[text] || text;
+    if (language === 'en') return safeRenderText(STATIC_EN[text] || text, STATIC_EN[text] || text);
+
+    const staticDictionary = DICTIONARIES[language] || null;
     
-    if (DICTIONARIES[language] && DICTIONARIES[language][text]) {
-      return DICTIONARIES[language][text];
+    const sourceText = safeRenderText(STATIC_EN[text] || text, STATIC_EN[text] || text);
+
+    // For bundled dictionaries (e.g., Hindi), always return immediately.
+    // This avoids async API translation delays and makes language switch instant.
+    if (staticDictionary) {
+      if (staticDictionary[text]) {
+        return safeRenderText(staticDictionary[text], sourceText);
+      }
+      if (translations[text]) return safeRenderText(translations[text], sourceText);
+      return sourceText;
     }
 
-    if (translations[text]) return translations[text];
-    
-    const sourceText = STATIC_EN[text] || text;
+    if (translations[text]) return safeRenderText(translations[text], sourceText);
+
     if (/^[0-9%.,\s$+-]+$/.test(sourceText)) return sourceText;
 
     if (sourceText.length > 80 && /[.!?]/.test(sourceText)) {
@@ -144,7 +217,7 @@ export const LanguageProvider = ({ children }) => {
           return s;
         });
         if (allTranslated) {
-          const joined = translatedSentences.join('');
+          const joined = safeRenderText(translatedSentences.join(''), sourceText);
           if (!translations[text]) {
             setTimeout(() => {
               setTranslations(prev => ({ ...prev, [text]: joined }));

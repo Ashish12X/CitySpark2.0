@@ -6,6 +6,7 @@ import { useLanguage } from '@/context/LanguageContext';
 
 export function SmartTextarea({ className, value, onChange, onVoiceUpdate, placeholder, ...props }) {
   const [isListening, setIsListening] = useState(false);
+  const [isSupported, setIsSupported] = useState(false);
   const recognitionRef = useRef(null);
   const { t } = useLanguage();
 
@@ -27,11 +28,12 @@ export function SmartTextarea({ className, value, onChange, onVoiceUpdate, place
             onChange(e);
         }
       };
-      recognition.onerror = (e) => {
+      recognition.onerror = () => {
         setIsListening(false);
       };
       recognition.onend = () => setIsListening(false);
       recognitionRef.current = recognition;
+      setIsSupported(true);
     }
     return () => {
         if (recognitionRef.current) recognitionRef.current.abort();
@@ -56,7 +58,7 @@ export function SmartTextarea({ className, value, onChange, onVoiceUpdate, place
         className={cn("pr-10 w-full", className)}
         {...props}
       />
-      {recognitionRef.current && (
+      {isSupported && (
         <button
           type="button"
           onClick={toggleListening}
