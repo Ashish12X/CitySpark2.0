@@ -12,12 +12,22 @@ const apiTarget = process.env.VITE_API_URL || `http://localhost:${apiPort}`
 export default defineConfig({
   plugins: [react()],
   server: {
+    host: '0.0.0.0',
     proxy: {
       '/api': {
         target: apiTarget,
         changeOrigin: true,
       },
     },
+  },
+  preview: {
+    host: '0.0.0.0',
+    port: 4173,
+    allowedHosts: [
+      'cityspark-frontend.onrender.com',
+      'localhost',
+      '127.0.0.1',
+    ],
   },
   resolve: {
     alias: {
